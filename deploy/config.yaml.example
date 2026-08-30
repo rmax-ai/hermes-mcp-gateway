@@ -1,0 +1,60 @@
+# Hermes MCP Gateway configuration.
+#
+# Copy to ~/.hermes/mcp-gateway/config.yaml (or anywhere and point the
+# HERMES_MCP_GATEWAY_CONFIG env var / the --config flag at it). All secrets
+# below are placeholders; replace them before use.
+
+server:
+  bind: 127.0.0.1                         # interface to listen on (keep loopback unless you have a reason)
+  port: 8778                              # HTTP port for MCP, healthz, and OAuth endpoints
+
+hermes:
+  bin: hermes                             # path to the hermes executable
+  profile: mcp-worker                     # hermes profile used for every spawned task
+  task_dir: /home/example/.hermes/mcp-gateway/tasks    # per-task status.json/stdout/stderr
+  db_path: /home/example/.hermes/mcp-gateway/gateway.db  # SQLite audit store
+  timeout_s: 1800                         # gateway-side upper bound on a task lifetime
+
+auth:
+  issuer: hermes-mcp-gateway              # JWT `iss` claim checked on validation
+  signing_secret_env: HERMES_MCP_GATEWAY_SIGNING_KEY  # env var the HS256 key is read from
+  token_ttl_s: 600                        # lifetime of issued access tokens
+
+clients:
+  # Read-only research client: no approvals, no terminal/browser/memory toolsets.
+  - client_id: research                   # unique client identifier (also the JWT subject)
+    secret_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000  # sha256 of the client secret (see `clients hash`); never store the plaintext secret
+    scopes:                               # capabilities a token for this client may carry
+      - task:run                          # allow spawning Hermes tasks at all
+      - toolset:file                      # read/edit files inside the workdir jail
+      - toolset:web                       # web search / fetch
+      - toolset:session_search            # search the Hermes session store
+      - toolset:todo                      # task-list management
+    requires_approval: false              # false: tasks run immediately (no human gate)
+    max_concurrency: 1                    # max simultaneous tasks for this client
+    max_duration_s: 600                   # per-task execution cap in seconds
+    max_turns: 120                        # max agent turns per task
+    workdirs:                             # filesystem roots tasks may run inside (jail)
+      - /home/example/src
+    models:                               # model allowlist; empty list means any model
+      - deepseek-v4-flash
+
+  # Terminal client: everything research has plus terminal, which is always gated
+  # on a human approval because `requires_approval` is on.
+  - client_id: terminal-ops               # unique client identifier
+    secret_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000  # sha256 of the client secret (placeholder)
+    scopes:                               # capabilities a token for this client may carry
+      - task:run                          # allow spawning Hermes tasks at all
+      - toolset:file                      # read/edit files inside the workdir jail
+      - toolset:web                       # web search / fetch
+      - toolset:session_search            # search the Hermes session store
+      - toolset:todo                      # task-list management
+      - toolset:terminal                  # shell access (always behind approval below)
+    requires_approval: true               # true: terminal-using tasks wait for an operator approve
+    max_concurrency: 1                    # max simultaneous tasks for this client
+    max_duration_s: 300                   # per-task execution cap in seconds (tighter than research)
+    max_turns: 60                         # max agent turns per task
+    workdirs:                             # filesystem roots tasks may run inside (jail)
+      - /home/example/projects
+    models:                               # model allowlist; empty list means any model
+      - deepseek-v4-flash

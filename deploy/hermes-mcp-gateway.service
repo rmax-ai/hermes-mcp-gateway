@@ -1,0 +1,28 @@
+# Hermes MCP Gateway - systemd user unit (template; copy to
+# ~/.config/systemd/user/hermes-mcp-gateway.service and edit paths/ports).
+#
+# The env file (~/.hermes/mcp-gateway/env) is where the JWT signing key lives:
+#     HERMES_MCP_GATEWAY_SIGNING_KEY=<64 hex chars from `openssl rand -hex 32`>
+# chmod 600 that file so only your user can read it:
+#     chmod 600 ~/.hermes/mcp-gateway/env
+# The leading '-' on EnvironmentFile means a missing file is not an error
+# (the gateway will refuse to start until the key is actually present).
+
+[Unit]
+Description=Hermes MCP Gateway
+After=network-online.target
+
+[Service]
+ExecStart=/home/rmax-10/src/rmax-ai/hermes-mcp-gateway/.venv/bin/python -m hermes_mcp_gateway.cli --config %h/.hermes/mcp-gateway/config.yaml
+EnvironmentFile=-%h/.hermes/mcp-gateway/env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
+# Enable and start:
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now hermes-mcp-gateway
+# Logs:
+#     journalctl --user -u hermes-mcp-gateway -f

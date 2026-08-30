@@ -1,0 +1,9 @@
+.hermes/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.serena/
+*.egg-info/
+dist/
