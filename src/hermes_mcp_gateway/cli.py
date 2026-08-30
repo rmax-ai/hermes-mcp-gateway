@@ -1,16 +1,15 @@
-"""Operator CLI entry point (not implemented in this phase)."""
+"""Console entry point.
+
+Delegates to :func:`hermes_mcp_gateway.app_factory.main`, which owns argument
+parsing so future operator verbs (P3) can be added without touching the
+packaging entry point.
+"""
 
 from __future__ import annotations
 
-import argparse
 import sys
 
+from .app_factory import main
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="hermes-mcp-gateway",
-        description="Operator CLI for the Hermes MCP Gateway.",
-    )
-    parser.parse_args(argv)
-    print("operator CLI arrives in a later phase", file=sys.stderr)
-    return 1
+if __name__ == "__main__":
+    sys.exit(main())

@@ -41,6 +41,10 @@ class TaskExecutor:
     def status_path(self, task_id: str) -> Path:
         return self.task_dir(task_id) / "status.json"
 
+    def read_status(self, task_id: str) -> dict | None:
+        """Return the task's ``status.json`` contents, or ``None``."""
+        return self._read_status(self.status_path(task_id))
+
     def _read_status(self, path) -> dict | None:
         try:
             state = json.loads(Path(path).read_text())

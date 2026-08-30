@@ -48,7 +48,12 @@ def test_expired_token():
 def test_tampered_token():
     token = auth.issue_token("test-client", ["task:run"], KEY, ISSUER, 300)
     # Corrupt the signature segment so the payload/signature no longer match.
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Flip the *first* signature character: the final base64url character only
+    # contributes four significant bits, so replacing it can leave the decoded
+    # signature unchanged and make this test flaky.
+    header, payload, signature = token.split(".")
+    first = "A" if not signature.startswith("A") else "B"
+    tampered = f"{header}.{payload}.{first}{signature[1:]}"
     with pytest.raises(AuthError) as excinfo:
         auth.validate_token(tampered, KEY, ISSUER)
     assert excinfo.value.code == "invalid_token"
