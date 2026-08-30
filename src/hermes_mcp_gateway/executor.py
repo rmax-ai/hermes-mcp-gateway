@@ -197,8 +197,12 @@ class TaskExecutor:
         started_at: str,
     ) -> dict:
         cmd = [self.cfg.hermes.bin, "-p", self.cfg.hermes.profile, "chat", "-q", prompt]
-        if toolsets:
-            cmd += ["-t", ",".join(toolsets)]
+        # Always pass an explicit toolset: an omitted -t makes hermes fall back
+        # to the profile's default toolsets (which include terminal), silently
+        # widening a client's access. Empty resolved set -> the locked-down
+        # "safe" toolset.
+        resolved_toolsets = toolsets or ["safe"]
+        cmd += ["-t", ",".join(resolved_toolsets)]
         if model:
             cmd += ["-m", model]
         cmd += ["--source", f"mcp:{client_id}", "--max-turns", str(max_turns), "-Q"]

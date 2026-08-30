@@ -26,6 +26,8 @@ def arg(name):
 
 
 prompt = arg("-q") or ""
+with open("argv.txt", "w") as f:
+    f.write("\n".join(sys.argv))
 print("fake-hermes-output")
 print("session_id: fake-session-123", file=sys.stderr)
 if "exit-nonzero" in prompt:
@@ -151,3 +153,22 @@ def test_idempotent_rerun_guard(tmp_path):
 
     assert second == first
     assert second["status"] == "done"
+
+
+def test_empty_toolsets_forces_safe_toolset(tmp_path):
+    # An omitted -t makes hermes fall back to profile defaults (which include
+    # terminal). The executor must always pass -t, defaulting to "safe".
+    _cfg, client, ex = make_executor(tmp_path)
+    ex.run(client, "t6", "hello", [], None, str(tmp_path))
+
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "-t" in argv
+    assert argv[argv.index("-t") + 1] == "safe"
+
+
+def test_explicit_toolsets_passed_through(tmp_path):
+    _cfg, client, ex = make_executor(tmp_path)
+    ex.run(client, "t7", "hello", ["file", "web"], None, str(tmp_path))
+
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("-t") + 1] == "file,web"
