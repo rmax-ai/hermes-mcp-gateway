@@ -27,7 +27,7 @@ def arg(name):
 
 prompt = arg("-q") or ""
 with open("argv.txt", "w") as f:
-    f.write("\n".join(sys.argv))
+    f.write(chr(10).join(sys.argv))
 print("fake-hermes-output")
 print("session_id: fake-session-123", file=sys.stderr)
 if "exit-nonzero" in prompt:
