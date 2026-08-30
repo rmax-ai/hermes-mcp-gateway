@@ -9,7 +9,7 @@ server:
   port: 8778                              # HTTP port for MCP, healthz, and OAuth endpoints
 
 hermes:
-  bin: hermes                             # path to the hermes executable
+  bin: hermes                             # path to the hermes executable; under systemd use the ABSOLUTE venv path (minimal PATH), e.g. /home/rmax-10/.hermes/hermes-agent/.venv/bin/hermes
   profile: mcp-worker                     # hermes profile used for every spawned task
   task_dir: /home/example/.hermes/mcp-gateway/tasks    # per-task status.json/stdout/stderr
   db_path: /home/example/.hermes/mcp-gateway/gateway.db  # SQLite audit store
