@@ -15,6 +15,8 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from . import telemetry
+
 SESSION_ID_RE = re.compile(r"session_id:\s*([^\s]+)")
 FINISHED_STATES = {"done", "failed", "timeout", "denied", "cancelled"}
 
@@ -164,8 +166,18 @@ class TaskExecutor:
             )
         self.db.update_task(task_id, status="running", started_at=started_at)
 
-        with self._semaphore(client_cfg):
-            return self._execute(
+        attrs = {
+            "task_id": task_id,
+            "client_id": client_id,
+            "toolsets": ",".join(toolsets),
+        }
+        if model is not None:
+            attrs["model"] = model
+
+        with self._semaphore(client_cfg), telemetry.span(
+            "hermes-mcp-gateway.task", attrs
+        ) as span:
+            result = self._execute(
                 task_id=task_id,
                 client_id=client_id,
                 prompt=prompt,
@@ -181,6 +193,15 @@ class TaskExecutor:
                 output_path=output_path,
                 started_at=started_at,
             )
+            if span is not None:
+                span.set_attribute("status", result.get("status") or "unknown")
+                exit_code = result.get("exit_code")
+                if exit_code is not None:
+                    span.set_attribute("exit_code", exit_code)
+                session_id = result.get("session_id")
+                if session_id:
+                    span.set_attribute("session_id", session_id)
+            return result
 
     def _execute(
         self,

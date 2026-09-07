@@ -15,6 +15,12 @@ dependencies = [
 [project.scripts]
 hermes-mcp-gateway = "hermes_mcp_gateway.cli:main"
 
+[project.optional-dependencies]
+telemetry = [
+    "opentelemetry-sdk>=1.26",
+    "opentelemetry-exporter-otlp-proto-http>=1.26",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -30,3 +36,8 @@ packages = ["src/hermes_mcp_gateway"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Vendored canonical shim (synced byte-identical from the lab's sync-shim); its
+# style is governed by the canonical copy, not this repo.
+[tool.ruff.lint.per-file-ignores]
+"src/hermes_mcp_gateway/telemetry.py" = ["E501", "I001", "RUF100"]

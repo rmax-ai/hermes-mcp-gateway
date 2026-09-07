@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -19,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, tools
+from . import auth, telemetry, tools
 from .context import auth_scope
 
 SCOPES_SUPPORTED = [
@@ -100,12 +101,29 @@ class McpAuthMiddleware:
 
         client = self.clients_by_id.get(claims["sub"]) if claims else None
         if claims is None or client is None:
-            await self._reject(scope, receive, send)
+            reason = "invalid_token" if claims is None else "unknown_client"
+            if not token:
+                reason = "missing_token"
+            with telemetry.span(
+                "hermes-mcp-gateway.auth",
+                {"decision": "rejected", "reason": reason},
+            ):
+                await self._reject(scope, receive, send)
             return
 
         scope["auth_client_id"] = client.client_id
         scopes = (claims.get("scope") or "").split()
-        with auth_scope(client, scopes):
+        with (
+            telemetry.span(
+                "hermes-mcp-gateway.auth",
+                {
+                    "decision": "authorized",
+                    "client_id": client.client_id,
+                    "scopes": " ".join(scopes),
+                },
+            ),
+            auth_scope(client, scopes),
+        ):
             await self.app(scope, receive, send)
 
     async def _reject(self, scope, receive, send) -> None:
@@ -171,6 +189,47 @@ class RequestLoggingMiddleware:
             )
 
 
+class TelemetryMiddleware:
+    """One OTel span per HTTP request (no-op unless telemetry is enabled).
+
+    The gateway uses a custom router and spawns subprocesses instead of making
+    outbound HTTP calls, so a request span is the whole HTTP surface. No
+    headers or bodies are recorded — only method/path/status/client.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_box = {"status": None}
+
+        async def send_wrapper(message) -> None:
+            if message["type"] == "http.response.start":
+                status_box["status"] = message["status"]
+            await send(message)
+
+        with telemetry.span(
+            "hermes-mcp-gateway.http",
+            {
+                "http.method": scope.get("method"),
+                "http.path": scope.get("path"),
+            },
+        ) as span:
+            try:
+                await self.app(scope, receive, send_wrapper)
+            finally:
+                if span is not None:
+                    if status_box["status"] is not None:
+                        span.set_attribute("http.status_code", status_box["status"])
+                    client_id = scope.get("auth_client_id")
+                    if client_id:
+                        span.set_attribute("client_id", client_id)
+
+
 def build_gateway_app(cfg, db, executor, signing_key: str) -> Starlette:
     """Assemble the gateway Starlette application."""
     issuer = cfg.auth.issuer
@@ -216,6 +275,25 @@ def build_gateway_app(cfg, db, executor, signing_key: str) -> Starlette:
         )
 
     async def token_endpoint(request: Request) -> JSONResponse:
+        with telemetry.span("hermes-mcp-gateway.token") as span:
+            response = await _token_exchange(request)
+            if span is not None:
+                span.set_attribute("http.status_code", response.status_code)
+                try:
+                    body = json.loads(response.body)
+                except (ValueError, TypeError):
+                    body = {}
+                error = body.get("error")
+                if error:
+                    span.set_attribute("decision", error)
+                else:
+                    span.set_attribute("decision", "ok")
+                    scopes = body.get("scope", "")
+                    if scopes:
+                        span.set_attribute("scopes", scopes)
+            return response
+
+    async def _token_exchange(request: Request) -> JSONResponse:
         form = await request.form()
 
         if form.get("grant_type") != "client_credentials":
@@ -284,4 +362,4 @@ def build_gateway_app(cfg, db, executor, signing_key: str) -> Starlette:
             yield
 
     plain_app = Starlette(routes=routes, lifespan=lifespan)
-    return RequestLoggingMiddleware(GatewayRouter(plain_app, authed_mcp))
+    return RequestLoggingMiddleware(TelemetryMiddleware(GatewayRouter(plain_app, authed_mcp)))

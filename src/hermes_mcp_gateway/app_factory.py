@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from . import telemetry
 from .auth import resolve_signing_key
 from .config import ConfigError, load_config
 from .db import Database
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: unknown command {args.command!r} (not implemented yet)", file=sys.stderr)
         return 2
 
+    telemetry.init("hermes-mcp-gateway")
     try:
         signing_key = resolve_signing_key(cfg.auth.signing_secret_env)
     except RuntimeError as exc:

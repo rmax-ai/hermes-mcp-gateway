@@ -14,7 +14,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
-from . import policy
+from . import policy, telemetry
 from .context import get_auth_context
 from .executor import FINISHED_STATES
 
@@ -26,6 +26,15 @@ def err_json(code: str, **extra) -> str:
     payload = {"error": code}
     payload.update(extra)
     return json.dumps(payload)
+
+
+def _mark(span, **attrs) -> None:
+    """Set primitive span attributes, skipping ``None`` values (no-op w/o span)."""
+    if span is None:
+        return
+    for key, value in attrs.items():
+        if value is not None:
+            span.set_attribute(key, value)
 
 
 def run_task(
@@ -44,34 +53,72 @@ def run_task(
 
     Returns ``{"task_id", "status"}`` on success or ``{"error", ...}``.
     """
-    if "task:run" not in scopes:
-        return err_json("forbidden", missing_scopes=["task:run"])
+    client_id = client_cfg.client_id
+    with telemetry.span(
+        "hermes-mcp-gateway.policy",
+        {
+            "client_id": client_id,
+            "requested_toolsets": ",".join(toolsets or []),
+        },
+    ) as span:
+        if "task:run" not in scopes:
+            _mark(span, decision="denied", reason="missing_task_run_scope")
+            return err_json("forbidden", missing_scopes=["task:run"])
 
-    requested = list(toolsets or [])
-    resolved = policy.allowed_toolsets(client_cfg, requested)
-    missing = [toolset for toolset in requested if toolset not in resolved]
-    if missing:
-        return err_json(
-            "forbidden",
-            missing_scopes=sorted({f"toolset:{name}" for name in missing}),
+        requested = list(toolsets or [])
+        resolved = policy.allowed_toolsets(client_cfg, requested)
+        missing = [toolset for toolset in requested if toolset not in resolved]
+        if missing:
+            _mark(
+                span,
+                decision="denied",
+                reason="missing_toolsets",
+                missing_scopes=",".join(sorted({f"toolset:{name}" for name in missing})),
+            )
+            return err_json(
+                "forbidden",
+                missing_scopes=sorted({f"toolset:{name}" for name in missing}),
+            )
+
+        requested_workdir = workdir or (client_cfg.workdirs[0] if client_cfg.workdirs else None)
+        resolved_workdir = policy.validate_workdir(client_cfg, requested_workdir)
+        if resolved_workdir is None:
+            _mark(span, decision="denied", reason="invalid_workdir")
+            return err_json("invalid_workdir", workdir=requested_workdir)
+
+        if model is not None and not policy.validate_model(client_cfg, model):
+            _mark(span, decision="denied", reason="invalid_model")
+            return err_json("invalid_model", model=model)
+
+        duration = client_cfg.max_duration_s
+        if max_duration_s is not None:
+            duration = min(int(max_duration_s), client_cfg.max_duration_s)
+        duration = max(1, duration)
+
+        task_id = uuid.uuid4().hex
+        _mark(
+            span,
+            task_id=task_id,
+            model=model,
+            toolsets=",".join(resolved),
+            workdir=resolved_workdir,
+            max_duration_s=duration,
         )
 
-    requested_workdir = workdir or (client_cfg.workdirs[0] if client_cfg.workdirs else None)
-    resolved_workdir = policy.validate_workdir(client_cfg, requested_workdir)
-    if resolved_workdir is None:
-        return err_json("invalid_workdir", workdir=requested_workdir)
+        if policy.requires_task_approval(client_cfg, resolved):
+            db.create_task(
+                task_id,
+                client_cfg.client_id,
+                prompt,
+                ",".join(resolved),
+                model,
+                resolved_workdir,
+                status="pending_approval",
+            )
+            db.create_approval(task_id)
+            _mark(span, decision="pending_approval")
+            return json.dumps({"task_id": task_id, "status": "pending_approval"})
 
-    if model is not None and not policy.validate_model(client_cfg, model):
-        return err_json("invalid_model", model=model)
-
-    duration = client_cfg.max_duration_s
-    if max_duration_s is not None:
-        duration = min(int(max_duration_s), client_cfg.max_duration_s)
-    duration = max(1, duration)
-
-    task_id = uuid.uuid4().hex
-
-    if policy.requires_task_approval(client_cfg, resolved):
         db.create_task(
             task_id,
             client_cfg.client_id,
@@ -79,31 +126,20 @@ def run_task(
             ",".join(resolved),
             model,
             resolved_workdir,
-            status="pending_approval",
+            status="pending",
         )
-        db.create_approval(task_id)
-        return json.dumps({"task_id": task_id, "status": "pending_approval"})
-
-    db.create_task(
-        task_id,
-        client_cfg.client_id,
-        prompt,
-        ",".join(resolved),
-        model,
-        resolved_workdir,
-        status="pending",
-    )
-    executor.submit(
-        client_cfg,
-        task_id,
-        prompt,
-        resolved,
-        model,
-        resolved_workdir,
-        max_duration_s=duration,
-        max_turns=client_cfg.max_turns,
-    )
-    return json.dumps({"task_id": task_id, "status": "submitted"})
+        executor.submit(
+            client_cfg,
+            task_id,
+            prompt,
+            resolved,
+            model,
+            resolved_workdir,
+            max_duration_s=duration,
+            max_turns=client_cfg.max_turns,
+        )
+        _mark(span, decision="submitted")
+        return json.dumps({"task_id": task_id, "status": "submitted"})
 
 
 def task_payload(db, executor, task_id: str) -> dict | None:

@@ -18,6 +18,7 @@ import os
 import sys
 from datetime import UTC, datetime
 
+from . import telemetry
 from .app_factory import create_app
 from .auth import issue_token, resolve_signing_key, validate_token
 from .config import ConfigError, load_config
@@ -128,21 +129,25 @@ def cmd_approvals_approve(cfg, db, executor, task_id: str) -> str:
         return ""
 
     client = _find_client(cfg, task["client_id"])
-    db.decide_approval(task_id, "approved", APPROVER)
-    toolsets = [name for name in (task["toolsets"] or "").split(",") if name]
+    with telemetry.span(
+        "hermes-mcp-gateway.approval",
+        {"decision": "approved", "task_id": task_id, "client_id": client.client_id},
+    ):
+        db.decide_approval(task_id, "approved", APPROVER)
+        toolsets = [name for name in (task["toolsets"] or "").split(",") if name]
 
-    db.update_task(task_id, status="running")
-    thread = executor.submit(
-        client,
-        task_id,
-        task["prompt"],
-        toolsets,
-        task["model"],
-        task["workdir"],
-        max_duration_s=client.max_duration_s,
-        max_turns=client.max_turns,
-    )
-    thread.join()
+        db.update_task(task_id, status="running")
+        thread = executor.submit(
+            client,
+            task_id,
+            task["prompt"],
+            toolsets,
+            task["model"],
+            task["workdir"],
+            max_duration_s=client.max_duration_s,
+            max_turns=client.max_turns,
+        )
+        thread.join()
 
     final = db.get_task(task_id) or {}
     return _table(
@@ -164,9 +169,18 @@ def cmd_approvals_deny(db, task_id: str, reason: str | None) -> str:
         )
         return ""
 
-    db.decide_approval(task_id, "denied", APPROVER)
     error = reason or "denied by operator"
-    db.update_task(task_id, status="denied", error=error, finished_at=_utcnow())
+    with telemetry.span(
+        "hermes-mcp-gateway.approval",
+        {
+            "decision": "denied",
+            "task_id": task_id,
+            "client_id": task["client_id"],
+            "reason": error,
+        },
+    ):
+        db.decide_approval(task_id, "denied", APPROVER)
+        db.update_task(task_id, status="denied", error=error, finished_at=_utcnow())
     return _table(["task_id", "status", "error"], [[task_id, "denied", error]])
 
 
@@ -409,6 +423,7 @@ def _dispatch(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    telemetry.init("hermes-mcp-gateway")
     args = build_parser().parse_args(argv)
     try:
         return _dispatch(args)
